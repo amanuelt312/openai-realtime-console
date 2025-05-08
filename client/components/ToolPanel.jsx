@@ -1,131 +1,103 @@
 import { useEffect, useState } from "react";
 
-const functionDescription = `
-Call this function when a user asks for a color palette.
-`;
-
-const sessionUpdate = {
-  type: "session.update",
-  session: {
-    tools: [
-      {
-        type: "function",
-        name: "display_color_palette",
-        description: functionDescription,
-        parameters: {
-          type: "object",
-          strict: true,
-          properties: {
-            theme: {
-              type: "string",
-              description: "Description of the theme for the color scheme.",
-            },
-            colors: {
-              type: "array",
-              description: "Array of five hex color codes based on the theme.",
-              items: {
-                type: "string",
-                description: "Hex color code",
-              },
-            },
-          },
-          required: ["theme", "colors"],
-        },
-      },
-    ],
-    tool_choice: "auto",
-  },
-};
-
-function FunctionCallOutput({ functionCallOutput }) {
-  const { theme, colors } = JSON.parse(functionCallOutput.arguments);
-
-  const colorBoxes = colors.map((color) => (
-    <div
-      key={color}
-      className="w-full h-16 rounded-md flex items-center justify-center border border-gray-200"
-      style={{ backgroundColor: color }}
-    >
-      <p className="text-sm font-bold text-black bg-slate-100 rounded-md p-2 border border-black">
-        {color}
-      </p>
-    </div>
-  ));
-
-  return (
-    <div className="flex flex-col gap-2">
-      <p>Theme: {theme}</p>
-      {colorBoxes}
-      <pre className="text-xs bg-gray-100 rounded-md p-2 overflow-x-auto">
-        {JSON.stringify(functionCallOutput, null, 2)}
-      </pre>
-    </div>
-  );
-}
-
 export default function ToolPanel({
   isSessionActive,
   sendClientEvent,
   events,
 }) {
-  const [functionAdded, setFunctionAdded] = useState(false);
-  const [functionCallOutput, setFunctionCallOutput] = useState(null);
+  const INITIAL_GREETING =
+    "Hello there! Welcome. I'm here to listen and understand what's going on for you today. Take a deep breath, settle in, and tell me, how are you doing in this moment?";
+
+  const GOAL = `The goal is to help fully understand the client's internal representations, strategies, and challenges. Explore 12 categories: Presenting Problem, Outcome Specification, Representational Systems, Submodalities, Eye Accessing Cues, Anchors, Values & Criteria, Beliefs, Strategies, Parts, Timeline, and Meta Model Language Patterns. Ask open-ended questions, clarify with follow-ups, and listen for patterns. When you have gathered enough information, format a summary in markdown with the prefix SUMMARY_COMPLETE.`;
+  const [insightData, setInsightData] = useState(null);
+  const [sessionInitialized, setSessionInitialized] = useState(false);
+  const MAX_QUESTIONS_BEFORE_CHECK = 5;
+  const [messagesCount, setMessagesCount] = useState(0);
 
   useEffect(() => {
     if (!events || events.length === 0) return;
 
     const firstEvent = events[events.length - 1];
-    if (!functionAdded && firstEvent.type === "session.created") {
-      sendClientEvent(sessionUpdate);
-      setFunctionAdded(true);
+    if (!sessionInitialized && firstEvent.type === "session.created") {
+      // Initialize with NLP assessment system prompt
+      sendClientEvent({
+        type: "session.update",
+        session: {
+          instructions: `start by saying: ${INITIAL_GREETING}
+          here is your goal: ${GOAL}`,
+        },
+      });
+      setSessionInitialized(true);
+    }
+    const userMessages = events.filter(
+      (e) => e.type === "conversation.item.created" && e.item?.role === "user",
+    );
+    console.log("userMessages ", userMessages);
+    console.log("messagesCount ", messagesCount);
+    // If we have a new user message and reached threshold, request evaluation
+    if (userMessages.length > messagesCount) {
+      setMessagesCount(userMessages.length);
+
+      // After every MAX_QUESTIONS_BEFORE_CHECK user messages, ask the model to evaluate
+      if (userMessages.length % MAX_QUESTIONS_BEFORE_CHECK === 0) {
+        console.log("Asking for evaluation....");
+        sendClientEvent({
+          type: "response.create",
+          response: {
+            instructions: `
+              Evaluate if you have gathered enough information about the user's internal representations, 
+              strategies, and challenges. If you need more information, continue asking relevant questions. 
+              If you have sufficient information, respond with a markdown-formatted summary prefixed with 
+              "SUMMARY_COMPLETE:" that highlights what you've learned about the user.
+            `,
+          },
+        });
+      }
     }
 
-    const mostRecentEvent = events[0];
-    if (
-      mostRecentEvent.type === "response.done" &&
-      mostRecentEvent.response.output
-    ) {
-      mostRecentEvent.response.output.forEach((output) => {
-        if (
-          output.type === "function_call" &&
-          output.name === "display_color_palette"
-        ) {
-          setFunctionCallOutput(output);
-          setTimeout(() => {
-            sendClientEvent({
-              type: "response.create",
-              response: {
-                instructions: `
-                ask for feedback about the color palette - don't repeat 
-                the colors, just ask if they like the colors.
-              `,
-              },
-            });
-          }, 500);
-        }
-      });
+    // Check for summary completion in responses
+    const responseEvents = events.filter((e) => e.type === "response.done");
+    if (responseEvents.length > 0) {
+      const lastResponse = responseEvents[0];
+      const outputTexts =
+        lastResponse.response?.output
+          ?.filter((o) => o.type === "text")
+          ?.map((o) => o.text) || [];
+
+      const fullText = outputTexts.join("");
+
+      if (fullText.includes("SUMMARY_COMPLETE:")) {
+        const summaryText = fullText.split("SUMMARY_COMPLETE:")[1].trim();
+        setInsightData({
+          summary: summaryText,
+          completed: true,
+        });
+      }
     }
-  }, [events]);
+  }, [events, sessionInitialized, messagesCount]);
 
   useEffect(() => {
     if (!isSessionActive) {
-      setFunctionAdded(false);
-      setFunctionCallOutput(null);
+      setSessionInitialized(false);
+      setInsightData(null);
+      setMessagesCount(0);
     }
   }, [isSessionActive]);
 
   return (
     <section className="h-full w-full flex flex-col gap-4">
       <div className="h-full bg-gray-50 rounded-md p-4">
-        <h2 className="text-lg font-bold">Color Palette Tool</h2>
+        <h2 className="text-lg font-bold">User Insights</h2>
         {isSessionActive ? (
-          functionCallOutput ? (
-            <FunctionCallOutput functionCallOutput={functionCallOutput} />
+          insightData?.completed ? (
+            <div className="markdown-content">
+              <div dangerouslySetInnerHTML={{ __html: insightData.summary }} />
+            </div>
           ) : (
-            <p>Ask for advice on a color palette...</p>
+            <p>Gathering insights from conversation...</p>
           )
         ) : (
-          <p>Start the session to use this tool...</p>
+          <p>Start the session to begin assessment...</p>
         )}
       </div>
     </section>

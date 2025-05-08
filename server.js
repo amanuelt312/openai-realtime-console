@@ -4,8 +4,10 @@ import { createServer as createViteServer } from "vite";
 import "dotenv/config";
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3001;
 const apiKey = process.env.OPENAI_API_KEY;
+const model = "gpt-4o-realtime-preview-2024-12-17";
+const voice = "verse";
 
 // Configure Vite middleware for React client
 const vite = await createViteServer({
@@ -26,8 +28,8 @@ app.get("/token", async (req, res) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "gpt-4o-realtime-preview-2024-12-17",
-          voice: "verse",
+          model,
+          voice,
         }),
       },
     );
